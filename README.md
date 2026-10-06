@@ -1,6 +1,6 @@
 # Moonlight - Apple TV
 
-A fork of [moonlight-ios](https://github.com/moonlight-stream/moonlight-ios) that adds a few streaming options to the **tvOS** app. It is not affiliated with or endorsed by the Moonlight project, and it is licensed under the GPLv3 like upstream. The original README follows below.
+A fork of [moonlight-ios](https://github.com/moonlight-stream/moonlight-ios) that adds a few streaming options to the **tvOS** app. It is not affiliated with or endorsed by the Moonlight project, and it is licensed under the GPLv3 like upstream. The original README follows below. Disclaimer: this project is vibecoded
 
 ## What this fork changes (tvOS only)
 
