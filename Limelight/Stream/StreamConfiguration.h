@@ -30,6 +30,8 @@
 @property int supportedVideoFormats;
 @property BOOL multiController;
 @property BOOL useFramePacing;
+// 0 = lowest latency, 1 = smoothest video, 2 = timestamp paced (experimental)
+@property int framePacingMode;
 @property NSData* serverCert;
 
 @end

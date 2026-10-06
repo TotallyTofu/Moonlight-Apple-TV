@@ -35,6 +35,15 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     
     CADisplayLink* _displayLink;
     BOOL framePacing;
+
+    // Timestamp pacing (frame pacing mode 2). The display layer shows each frame at
+    // (anchor + host capture time + playout delay), so the host's capture cadence is
+    // restored and network jitter up to the playout delay is absorbed.
+    BOOL timestampPacing;
+    BOOL timebaseAnchored;
+    int64_t tsLatencyUs;
+    int64_t tsLastPtsUs;
+    int tsFramesSinceLate;
 }
 
 - (void)reinitializeDisplayLayer
@@ -59,6 +68,22 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     displayLayer.bounds = CGRectMake(0, 0, videoSize.width, videoSize.height);
     displayLayer.videoGravity = AVLayerVideoGravityResize;
 
+    timebaseAnchored = NO;
+    if (timestampPacing) {
+        // Paused until the first frame arrives and anchors it to the host timestamps
+        CMTimebaseRef timebase = NULL;
+        OSStatus tbStatus = CMTimebaseCreateWithSourceClock(kCFAllocatorDefault, CMClockGetHostTimeClock(), &timebase);
+        if (tbStatus == noErr && timebase != NULL) {
+            CMTimebaseSetRate(timebase, 0.0);
+            displayLayer.controlTimebase = timebase;
+            CFRelease(timebase);
+        }
+        else {
+            Log(LOG_E, @"CMTimebaseCreateWithSourceClock failed: %d, timestamp pacing disabled", (int)tbStatus);
+            timestampPacing = NO;
+        }
+    }
+
     // Hide the layer until we get an IDR frame. This ensures we
     // can see the loading progress label as the stream is starting.
     displayLayer.hidden = YES;
@@ -77,14 +102,15 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     }
 }
 
-- (id)initWithView:(StreamView*)view callbacks:(id<ConnectionCallbacks>)callbacks streamAspectRatio:(float)aspectRatio useFramePacing:(BOOL)useFramePacing
+- (id)initWithView:(StreamView*)view callbacks:(id<ConnectionCallbacks>)callbacks streamAspectRatio:(float)aspectRatio framePacingMode:(int)framePacingMode
 {
     self = [super init];
     
     _view = view;
     _callbacks = callbacks;
     _streamAspectRatio = aspectRatio;
-    framePacing = useFramePacing;
+    framePacing = framePacingMode == 1;
+    timestampPacing = framePacingMode == 2;
     
     parameterSetBuffers = [[NSMutableArray alloc] init];
     
@@ -109,6 +135,67 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
         _displayLink.preferredFramesPerSecond = self->frameRate;
     }
     [_displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSDefaultRunLoopMode];
+}
+
+// Maps a frame's host capture time onto the display layer's timebase.
+// presentationTimeUs comes from the host's RTP timestamps (see Limelight.h).
+- (void)paceFrameWithPresentationTimeUs:(int64_t)ptsUs
+{
+    CMTimebaseRef timebase = displayLayer.controlTimebase;
+    if (timebase == NULL) {
+        return;
+    }
+
+    const int64_t periodUs = 1000000 / MAX(frameRate, 1);
+    // Enough delay to cover waiting for the next display link tick plus half a frame of jitter
+    const int64_t baseLatencyUs = periodUs + periodUs / 2;
+    const int64_t maxLatencyUs = periodUs * 4;
+
+    // (Re)anchor on the first frame, or if the host timestamps go backwards or jump
+    if (!timebaseAnchored || ptsUs < tsLastPtsUs || ptsUs - tsLastPtsUs > 1000000) {
+        tsLatencyUs = baseLatencyUs;
+        tsFramesSinceLate = 0;
+        CMTimebaseSetRateAndAnchorTime(timebase, 1.0,
+                                       CMTimeMake(ptsUs - tsLatencyUs, 1000000),
+                                       CMClockGetTime(CMClockGetHostTimeClock()));
+        timebaseAnchored = YES;
+        tsLastPtsUs = ptsUs;
+        Log(LOG_I, @"Timestamp pacing anchored, playout delay %lld us", tsLatencyUs);
+        return;
+    }
+    tsLastPtsUs = ptsUs;
+
+    int64_t timebaseUs = (int64_t)llround(CMTimeGetSeconds(CMTimebaseGetTime(timebase)) * 1000000.0);
+    int64_t leadUs = ptsUs - timebaseUs;
+    int64_t shiftUs = 0; // positive moves the timebase forward, so frames show sooner
+
+    if (leadUs < 0) {
+        // This frame missed its slot. Add playout delay so the next ones don't.
+        int64_t growUs = MIN(-leadUs, maxLatencyUs - tsLatencyUs);
+        if (growUs > 0) {
+            shiftUs = -growUs;
+            tsLatencyUs += growUs;
+            Log(LOG_D, @"Timestamp pacing: late frame, playout delay now %lld us", tsLatencyUs);
+        }
+        tsFramesSinceLate = 0;
+    }
+    else if (leadUs > tsLatencyUs + periodUs * 4) {
+        // Frames are queuing up far ahead of their slots (clock drift or a burst after a stall).
+        // Jump forward to the target delay. The queued frames then show right away.
+        shiftUs = leadUs - tsLatencyUs;
+        Log(LOG_D, @"Timestamp pacing: %lld us ahead, skipping forward", leadUs);
+        tsFramesSinceLate = 0;
+    }
+    else if (++tsFramesSinceLate >= 120 && tsLatencyUs - 1000 >= baseLatencyUs) {
+        // Smooth stretch: slowly give delay back
+        shiftUs = 1000;
+        tsLatencyUs -= 1000;
+        tsFramesSinceLate = 0;
+    }
+
+    if (shiftUs != 0) {
+        CMTimebaseSetTime(timebase, CMTimeMake(timebaseUs + shiftUs, 1000000));
+    }
 }
 
 // TODO: Refactor this
@@ -592,6 +679,10 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
         CFRelease(dataBlockBuffer);
         CFRelease(frameBlockBuffer);
         return DR_NEED_IDR;
+    }
+
+    if (timestampPacing) {
+        [self paceFrameWithPresentationTimeUs:(int64_t)du->presentationTimeUs];
     }
 
     // Enqueue the next frame

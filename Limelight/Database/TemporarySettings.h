@@ -26,11 +26,14 @@
     CODEC_PREF_AV1,
 } preferredCodec;
 @property (nonatomic) BOOL useFramePacing;
+// 0 = lowest latency, 1 = smoothest video, 2 = timestamp paced (experimental)
+@property (nonatomic) int framePacingMode;
 @property (nonatomic) BOOL multiController;
 @property (nonatomic) BOOL swapABXYButtons;
 @property (nonatomic) BOOL playAudioOnPC;
 @property (nonatomic) BOOL optimizeGames;
 @property (nonatomic) BOOL enableHdr;
+@property (nonatomic) BOOL enableYUV444;
 @property (nonatomic) BOOL btMouseSupport;
 @property (nonatomic) BOOL absoluteTouchMode;
 @property (nonatomic) BOOL statsOverlay;

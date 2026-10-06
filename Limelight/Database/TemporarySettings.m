@@ -37,9 +37,12 @@
     self.audioConfig = [NSNumber numberWithInteger:[[NSUserDefaults standardUserDefaults] integerForKey:@"audioConfig"]];
     assert([self.audioConfig intValue] != 0);
     self.preferredCodec = (typeof(self.preferredCodec))[[NSUserDefaults standardUserDefaults] integerForKey:@"preferredCodec"];
-    self.useFramePacing = [[NSUserDefaults standardUserDefaults] integerForKey:@"useFramePacing"] != 0;
+    NSInteger pacingMode = [[NSUserDefaults standardUserDefaults] integerForKey:@"useFramePacing"];
+    self.framePacingMode = (pacingMode >= 0 && pacingMode <= 2) ? (int)pacingMode : 0;
+    self.useFramePacing = self.framePacingMode == 1;
     self.playAudioOnPC = [[NSUserDefaults standardUserDefaults] boolForKey:@"audioOnPC"];
     self.enableHdr = [[NSUserDefaults standardUserDefaults] boolForKey:@"enableHdr"];
+    self.enableYUV444 = [[NSUserDefaults standardUserDefaults] boolForKey:@"enableYUV444"];
     self.optimizeGames = [[NSUserDefaults standardUserDefaults] boolForKey:@"optimizeGames"];
     self.multiController = [[NSUserDefaults standardUserDefaults] boolForKey:@"multipleControllers"];
     self.swapABXYButtons = [[NSUserDefaults standardUserDefaults] boolForKey:@"swapABXYButtons"];
@@ -76,8 +79,11 @@
     self.audioConfig = settings.audioConfig;
     self.preferredCodec = settings.preferredCodec;
     self.useFramePacing = settings.useFramePacing;
+    self.framePacingMode = settings.useFramePacing ? 1 : 0;
     self.playAudioOnPC = settings.playAudioOnPC;
     self.enableHdr = settings.enableHdr;
+    // YUV 4:4:4 is only exposed in the tvOS settings bundle
+    self.enableYUV444 = NO;
     self.optimizeGames = settings.optimizeGames;
     self.multiController = settings.multiController;
     self.swapABXYButtons = settings.swapABXYButtons;

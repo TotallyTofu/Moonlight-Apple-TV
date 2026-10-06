@@ -37,6 +37,8 @@
 
 #include <Limelight.h>
 
+#import "../Stream/DecoderProbe.h"
+
 @implementation MainFrameViewController {
     NSOperationQueue* _opQueue;
     TemporaryHost* _selectedHost;
@@ -638,6 +640,7 @@ static NSMutableSet* hostList;
     _streamConfig.optimizeGameSettings = streamSettings.optimizeGames;
     _streamConfig.playAudioOnPC = streamSettings.playAudioOnPC;
     _streamConfig.useFramePacing = streamSettings.useFramePacing;
+    _streamConfig.framePacingMode = streamSettings.framePacingMode;
     _streamConfig.swapABXYButtons = streamSettings.swapABXYButtons;
     
     // multiController must be set before calling getConnectedGamepadMask
@@ -700,6 +703,44 @@ static NSMutableSet* hostList;
         _streamConfig.supportedVideoFormats |= VIDEO_FORMAT_AV1_MAIN10;
     }
 #endif
+
+    // YUV 4:4:4, following moonlight-qt: offer the 4:4:4 profile of each codec we already offer,
+    // but only if the host supports YUV 4:4:4 and this device decodes that profile in hardware.
+    // moonlight-common-c then picks the 4:4:4 profile when the host has it too.
+    if (streamSettings.enableYUV444) {
+        if (!(app.host.serverCodecModeSupport & SCM_MASK_YUV444)) {
+            Log(LOG_W, @"YUV 4:4:4 requested, but the host doesn't support it");
+        }
+        else {
+            if ((_streamConfig.supportedVideoFormats & VIDEO_FORMAT_H264) &&
+                DecoderProbeHardwareDecodes(VIDEO_FORMAT_H264_HIGH8_444)) {
+                _streamConfig.supportedVideoFormats |= VIDEO_FORMAT_H264_HIGH8_444;
+            }
+            if ((_streamConfig.supportedVideoFormats & VIDEO_FORMAT_H265) &&
+                DecoderProbeHardwareDecodes(VIDEO_FORMAT_H265_REXT8_444)) {
+                _streamConfig.supportedVideoFormats |= VIDEO_FORMAT_H265_REXT8_444;
+            }
+            if ((_streamConfig.supportedVideoFormats & VIDEO_FORMAT_H265_MAIN10) &&
+                DecoderProbeHardwareDecodes(VIDEO_FORMAT_H265_REXT10_444)) {
+                _streamConfig.supportedVideoFormats |= VIDEO_FORMAT_H265_REXT10_444;
+            }
+
+            // Like moonlight-qt, prefer 4:4:4 over HDR when the host can't do both at once.
+            // Otherwise moonlight-common-c would pick HEVC Main10 (4:2:0) over HEVC 4:4:4 8-bit.
+            if ((_streamConfig.supportedVideoFormats & VIDEO_FORMAT_H265_MAIN10) &&
+                (_streamConfig.supportedVideoFormats & VIDEO_FORMAT_H265_REXT8_444) &&
+                !((_streamConfig.supportedVideoFormats & VIDEO_FORMAT_H265_REXT10_444) &&
+                  (app.host.serverCodecModeSupport & SCM_HEVC_REXT10_444)) &&
+                (app.host.serverCodecModeSupport & SCM_HEVC_REXT8_444)) {
+                Log(LOG_W, @"Host can't stream HDR and YUV 4:4:4 together, using YUV 4:4:4 without HDR");
+                _streamConfig.supportedVideoFormats &= ~(VIDEO_FORMAT_H265_MAIN10 | VIDEO_FORMAT_H265_REXT10_444);
+            }
+
+            if (!(_streamConfig.supportedVideoFormats & VIDEO_FORMAT_MASK_YUV444)) {
+                Log(LOG_W, @"YUV 4:4:4 requested, but this device can't decode it in hardware");
+            }
+        }
+    }
 }
 
 - (void)appLongClicked:(TemporaryApp *)app view:(UIView *)view {
